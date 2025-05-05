@@ -30,9 +30,10 @@ MOUNT_DIR = "/root/ai-toolkit/modal_output"  # modal_output, due to "cannot moun
 
 # define modal app
 image = (
-    modal.Image.debian_slim(python_version="3.11")
+    modal.Image.from_registry("nvidia/cuda:12.4.0-devel-ubuntu22.04", add_python="3.11")
     # install required system and pip packages, more about this modal approach: https://modal.com/docs/examples/dreambooth_app
     .apt_install("libgl1", "libglib2.0-0")
+    .pip_install("cupy-cuda12x")
     .pip_install(
         "python-dotenv",
         "torch", 
@@ -59,24 +60,27 @@ image = (
         "open_clip_torch",
         "timm",
         "prodigyopt",
-        "controlnet_aux==0.0.7",
+        "controlnet_aux==0.0.9",
         "bitsandbytes",
         "hf_transfer",
         "lpips", 
         "pytorch_fid", 
-        "optimum-quanto", 
+        "optimum-quanto",
+        "torchao",
         "sentencepiece", 
         "huggingface_hub", 
         "peft"
     )
+    # Add local directory using add_local_dir method
+    .add_local_dir("/Users/jack/repos/hackbig/comic/ai-toolkit", remote_path="/root/ai-toolkit")
 )
 
 # mount for the entire ai-toolkit directory
 # example: "/Users/username/ai-toolkit" is the local directory, "/root/ai-toolkit" is the remote directory
-code_mount = modal.Mount.from_local_dir("/Users/username/ai-toolkit", remote_path="/root/ai-toolkit")
+# code_mount = modal.Mount.from_local_dir("/Users/jack/repos/ai/ai-toolkit", remote_path="/root/ai-toolkit")
 
 # create the Modal app with the necessary mounts and volumes
-app = modal.App(name="flux-lora-training", image=image, mounts=[code_mount], volumes={MOUNT_DIR: model_volume})
+app = modal.App(name="flux-lora-training", image=image, volumes={MOUNT_DIR: model_volume})
 
 # Check if we have DEBUG_TOOLKIT in env
 if os.environ.get("DEBUG_TOOLKIT", "0") == "1":
@@ -85,7 +89,6 @@ if os.environ.get("DEBUG_TOOLKIT", "0") == "1":
     torch.autograd.set_detect_anomaly(True)
 
 import argparse
-from toolkit.job import get_job
 
 def print_end_message(jobs_completed, jobs_failed):
     failure_string = f"{jobs_failed} failure{'' if jobs_failed == 1 else 's'}" if jobs_failed > 0 else ""
@@ -100,15 +103,20 @@ def print_end_message(jobs_completed, jobs_failed):
         print(f" - {failure_string}")
     print("========================================")
 
+huggingface_secret = modal.Secret.from_name(
+    "huggingface-secret", required_keys=["HF_TOKEN"]
+)
 
 @app.function(
     # request a GPU with at least 24GB VRAM
     # more about modal GPU's: https://modal.com/docs/guide/gpu
     gpu="A100", # gpu="H100"
+    secrets=[huggingface_secret],
     # more about modal timeouts: https://modal.com/docs/guide/timeouts
-    timeout=7200  # 2 hours, increase or decrease if needed
+    timeout=14400  # 4 hours, increase or decrease if needed
 )
 def main(config_file_list_str: str, recover: bool = False, name: str = None):
+    from toolkit.job import get_job
     # convert the config file list from a string to a list
     config_file_list = config_file_list_str.split(",")
 
